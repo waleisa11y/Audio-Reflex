@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Audio Reflex - Final Stable</title>
+    <style>
+        /* --- Base Styles --- */
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            background-color: #000000;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden; /* Prevent scroll */
+            touch-action: none; /* specific gesture handling */
+            -webkit-user-select: none; /* prevent text selection */
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #app {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        /* --- Header --- */
+        header {
+            padding: 20px;
+            text-align: center;
+            border-bottom: 1px solid #333;
+            flex-shrink: 0;
+            pointer-events: none;
+        }
+
+        h1 { font-size: 1.2rem; margin: 0; opacity: 0.8; letter-spacing: 1px; }
+
+        #score-display {
+            font-size: 1.5rem;
+            margin-top: 5px;
+            font-weight: bold;
+            color: #4ade80;
+            font-feature-settings: "tnum"; /* Monospaced numbers prevent jitter */
+        }
+
+        #status-area {
+            height: 40px;
+            line-height: 40px;
+            text-align: center;
+            color: #fbbf24;
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+
+        /* --- Timer Bar (Hardware Accelerated) --- */
+        #timer-bar-container {
+            width: 100%;
+            height: 6px;
+            background-color: #333;
+        }
+
+        #timer-bar {
+            width: 100%;
+            height: 100%;
+            background-color: #ef4444;
+            transform-origin: left;
+            will-change: transform; /* Hint to browser for optimization */
+        }
+
+        /* --- Input Zone --- */
+        canvas {
+            display: block;
+            flex-grow: 1;
+            width: 100%;
+            background-color: #111;
+            outline: none;
+            touch-action: none;
+        }
+
+        /* --- Overlay --- */
+        #overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background-color: rgba(0,0,0,0.95);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+        }
+
+        #start-btn {
+            padding: 20px 40px;
+            font-size: 1.5rem;
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            margin-top: 30px;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4);
+        }
+
+        .instructions {
+            max-width: 600px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+        }
+        
+        .gesture-hint {
+            margin-top: 15px;
+            color: #fbbf24;
+            font-size: 0.95rem;
+            background: #1f2937;
+            padding: 10px;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app">
+        <header>
+            <h1>Audio Reflex</h1>
+            <div id="score-display">Score: 0</div>
+            <div id="status-area">Waiting...</div>
+        </header>
+        
+        <div id="timer-bar-container">
+            <div id="timer-bar" style="width: 100%;"></div>
+        </div>
+
+        <canvas id="game-canvas" 
+                role="application" 
+                aria-label="Game Screen. Direct Touch Area."
+                tabindex="0">
+        </canvas>
+    </div>
+
+    <div id="overlay">
+        <h2>Reflex Edition</h2>
+        <div class="instructions">
+            <p><strong>Headphones Required.</strong></p>
+            <p>1. Listen for direction (Left, Right, Center).</p>
+            <p>2. Swipe to match.</p>
+            <div class="gesture-hint">
+                <strong>VoiceOver Users:</strong><br>
+                Use Rotor to select <strong>"Direct Touch"</strong>.<br>
+                1 Finger Swipe: Play Game<br>
+                Swipe Down: Tutorial<br>
+                3-Finger Double Tap: Pause/Resume<br>
+                3-Finger Swipe: Secret Cheats
+            </div>
+        </div>
+        <button id="start-btn">Start Game</button>
+    </div>
+
+    <script>
+        /**
+         * --- CONFIGURATION ---
+         */
+        const LEVELS = [
+            { score: 0,   timeLimit: 5000, pulseSpeed: 1000, delay: 1200, label: null },
+            { score: 150, timeLimit: 4000, pulseSpeed: 800,  delay: 1200, label: "Level 2. 4 seconds." },
+            { score: 300, timeLimit: 3000, pulseSpeed: 600,  delay: 1200, label: "Level 3. 3 seconds." },
+            { score: 450, timeLimit: 2000, pulseSpeed: 400,  delay: 1200, label: "Level 4. Maximum speed. 2 seconds." },
+            { score: 550, timeLimit: 1000, pulseSpeed: 200,  delay: 1200, label: "Level 5. Extreme speed. 1 second." }, // Index 4
+            { score: 650, timeLimit: 750,  pulseSpeed: 100,  delay: 1200, label: "Level 6. Ludicrous speed. Point seven five seconds." },
+            { score: 750, timeLimit: 700,  pulseSpeed: 80,   delay: 1200, label: "Level 7. Supersonic speed. Point seven seconds." },
+            { score: 850, timeLimit: 650,  pulseSpeed: 60,   delay: 1200, label: "Level 8. Hyper speed. Point six five seconds." }, 
+            { score: 1000, timeLimit: 650, pulseSpeed: 60,   delay: 200,  label: "Level 9. Zero Delay Mode.", checkpoint: true }
+        ];
+
+        /**
+         * --- AUDIO ENGINE ---
+         */
+        class AudioManager {
+            constructor() {
+                this.ctx = null;
+                this.synth = window.speechSynthesis;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            speak(text, priority = false) {
+                if (!this.synth) return;
+                if (priority) this.synth.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 1.2;
+                utterance.pitch = 1.0;
+                this.synth.speak(utterance);
+            }
+
+            speakAsync(text) {
+                return new Promise((resolve) => {
+                    if (!this.synth) { resolve(); return; }
+                    this.synth.cancel();
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.rate = 1.1;
+                    utterance.onend = () => resolve();
+                    setTimeout(resolve, (text.length * 80) + 1200); 
+                    this.synth.speak(utterance);
+                });
+            }
+
+            playTone(freq, type, duration, panVal, vol = 0.1) {
+                if (!this.ctx) return;
+                const t = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                const panner = this.ctx.createStereoPanner();
+
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, t);
+                panner.pan.setValueAtTime(panVal, t);
+
+                gain.gain.setValueAtTime(0, t);
+                gain.gain.linearRampToValueAtTime(vol, t + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+
+                osc.connect(panner);
+                panner.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start(t);
+                osc.stop(t + duration + 0.1);
+            }
+
+            playTarget(pan) {
+                this.playTone(440, 'sine', 0.15, pan, 0.2); 
+                setTimeout(() => this.playTone(880, 'triangle', 0.05, pan, 0.1), 30);
+            }
+
+            playSuccess() {
+                this.playTone(523.25, 'sine', 0.1, 0, 0.1); 
+                setTimeout(() => this.playTone(783.99, 'sine', 0.2, 0, 0.1), 100); 
+            }
+
+            playFailure() {
+                this.playTone(150, 'sawtooth', 0.4, 0, 0.2);
+                this.playTone(100, 'sawtooth', 0.4, 0, 0.2);
+            }
+
+            playLevelUp() {
+                if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+                const t = 'triangle';
+                this.playTone(523.25, t, 0.4, 0, 0.15); 
+                this.playTone(659.25, t, 0.4, 0, 0.15); 
+                this.playTone(783.99, t, 0.4, 0, 0.15); 
+                setTimeout(() => this.playTone(1046.50, 'sine', 0.6, 0, 0.1), 100);
+            }
+
+            playPauseStart() {
+                this.playTone(440, 'sine', 0.1, 0, 0.2); 
+                setTimeout(() => this.playTone(554.37, 'sine', 0.1, 0, 0.2), 150); 
+                setTimeout(() => this.playTone(659.25, 'sine', 0.2, 0, 0.2), 300); 
+            }
+
+            playPauseEnd() {
+                this.playTone(659.25, 'sine', 0.1, 0, 0.2); 
+                setTimeout(() => this.playTone(554.37, 'sine', 0.1, 0, 0.2), 150); 
+                setTimeout(() => this.playTone(440, 'sine', 0.2, 0, 0.2), 300); 
+            }
+        }
+
+        /**
+         * --- GAME LOGIC ---
+         */
+        class GameEngine {
+            constructor(audio, input) {
+                this.audio = audio;
+                this.input = input;
+                
+                this.score = 0;
+                this.state = 'INIT'; 
+                this.wakeLock = null; 
+                
+                this.currentTarget = 0;
+                this.currentSettings = LEVELS[0];
+                
+                this.pulseInterval = null;
+                this.roundTimer = null;
+                this.skipCooldown = 0;
+
+                this.uiScore = document.getElementById('score-display');
+                this.uiStatus = document.getElementById('status-area');
+                this.uiTimer = document.getElementById('timer-bar');
+                this.overlay = document.getElementById('overlay');
+                this.startBtn = document.getElementById('start-btn');
+
+                this.bindEvents();
+                
+                document.addEventListener('visibilitychange', () => {
+                    if (this.wakeLock !== null && document.visibilityState === 'visible') {
+                        this.requestWakeLock();
+                    }
+                });
+            }
+
+            bindEvents() {
+                this.startBtn.addEventListener('click', () => {
+                    this.requestWakeLock(); 
+                    this.enterStandby();
+                });
+            }
+
+            async requestWakeLock() {
+                if ('wakeLock' in navigator) {
+                    try {
+                        this.wakeLock = await navigator.wakeLock.request('screen');
+                    } catch (err) {
+                        console.log('Wake Lock Error:', err);
+                    }
+                }
+            }
+
+            enterStandby() {
+                this.audio.init();
+                this.state = 'STANDBY';
+                this.overlay.style.display = 'none';
+
+                this.score = 0;
+                this.updateScoreUI();
+                this.uiStatus.innerText = "Swipe Up: Start | Down: Tutorial";
+                this.currentSettings = LEVELS[0];
+                
+                this.resetTimers();
+                this.input.canvas.focus();
+                
+                this.audio.speak("Welcome to audio reflex. Swipe up to begin. Swipe down to hear the tutorial.", true);
+            }
+
+            async runTutorial() {
+                this.state = 'TUTORIAL';
+                this.isTutorialInputLocked = true;
+                this.resetTimers(); 
+                this.uiStatus.innerText = "Playing Tutorial...";
+                
+                const intro = "The object of the game is to swipe in the direction of the pulsing sound. The more you level up, the faster the pulsing sound will get, and you will have less time to swipe. You will now hear all of the different sounds in the game, followed by what they mean.";
+                await this.audio.speakAsync(intro);
+                
+                await this.tutorialWait(500);
+                this.runCountdownEffect(); 
+                await this.tutorialWait(3500); 
+                await this.audio.speakAsync("You will hear this countdown sound at the beginning of every level.");
+                await this.tutorialPromptNext();
+
+                for (let i = 0; i < 3; i++) {
+                    this.audio.playTarget(0); 
+                    await this.tutorialWait(800); 
+                }
+                await this.audio.speakAsync("This is the pulse. Swipe in the direction of the sound.");
+                await this.tutorialPromptNext();
+
+                this.audio.playSuccess();
+                await this.tutorialWait(1000);
+                await this.audio.speakAsync("This sound means you swiped correctly.");
+                await this.tutorialPromptNext();
+
+                this.audio.playFailure();
+                await this.tutorialWait(1000);
+                await this.audio.speakAsync("This sound means game over.");
+                await this.tutorialPromptNext();
+
+                this.audio.playLevelUp();
+                await this.tutorialWait(1500);
+                await this.audio.speakAsync("When you hear this sound, it means you have leveled up and the game will get faster.");
+                await this.tutorialPromptNext();
+
+                await this.audio.speakAsync("End of tutorial.");
+                this.enterStandby(); 
+            }
+
+            tutorialWait(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+
+            async tutorialPromptNext() {
+                await this.audio.speakAsync("Swipe right to continue.");
+                this.uiStatus.innerText = "Tutorial: Swipe Right >>";
+                this.isTutorialInputLocked = false; 
+                
+                await new Promise(resolve => {
+                    this.tutorialNextResolver = resolve;
+                });
+                
+                this.isTutorialInputLocked = true; 
+                this.uiStatus.innerText = "Playing...";
+            }
+
+            advanceTutorial() {
+                if (this.tutorialNextResolver) {
+                    this.tutorialNextResolver();
+                    this.tutorialNextResolver = null;
+                }
+            }
+
+            startLevel1() {
+                this.state = 'LOCKED';
+                this.uiStatus.innerText = "Starting...";
+                this.audio.speak("Game Started. Level 1. 5 Seconds.");
+                this.runCountdown(2500);
+            }
+
+            nextRound() {
+                if (this.state === 'STANDBY') return;
+                
+                this.resetTimers();
+                this.state = 'PLAYING';
+
+                const dirs = [-1, 0, 1];
+                this.currentTarget = dirs[Math.floor(Math.random() * dirs.length)];
+
+                this.audio.playTarget(this.currentTarget);
+                this.pulseInterval = setInterval(() => {
+                    if (this.state === 'PLAYING') this.audio.playTarget(this.currentTarget);
+                }, this.currentSettings.pulseSpeed);
+
+                this.animateTimer(this.currentSettings.timeLimit);
+                this.roundTimer = setTimeout(() => this.handleTimeout(), this.currentSettings.timeLimit);
+            }
+
+            handleInput(direction) {
+                if (direction === 'pause') {
+                    this.togglePause();
+                    return;
+                }
+
+                if (this.state === 'PAUSED') {
+                    if (direction === -1 || direction === 0 || direction === 1 || direction === 'tutorial') {
+                        this.audio.speak("Game paused. Double tap with three fingers to resume.", true);
+                    }
+                    return; 
+                }
+
+                if (this.state === 'TUTORIAL') {
+                    if (!this.isTutorialInputLocked && direction === 1) { 
+                        this.advanceTutorial();
+                    }
+                    return;
+                }
+
+                if (this.state === 'STANDBY') {
+                    if (direction === 0) { 
+                        if (this.score >= 1000) this.resumeFromCheckpoint();
+                        else this.startLevel1();
+                    } else if (direction === 'tutorial') { 
+                        this.runTutorial();
+                    }
+                    return;
+                }
+
+                if (this.state !== 'PLAYING') return;
+
+                if (direction === 'skip') { this.cheatSkipLevel(); return; }
+                if (direction === 'skip_to_5') { this.cheatSkipTo5(); return; }
+                if (direction === 'skip_to_9') { this.cheatSkipTo9(); return; }
+
+                this.resetTimers();
+                this.stopTimerAnimation();
+
+                if (direction === this.currentTarget) {
+                    this.handleSuccess();
+                } else {
+                    this.gameOver("Wrong direction.");
+                }
+            }
+
+            togglePause() {
+                if (this.state === 'PLAYING') {
+                    this.state = 'PAUSED';
+                    this.resetTimers();
+                    this.stopTimerAnimation();
+                    this.audio.playPauseStart(); 
+                    this.audio.speak("Paused.", true);
+                    this.uiStatus.innerText = "Paused";
+                } else if (this.state === 'PAUSED') {
+                    this.state = 'LOCKED';
+                    this.audio.playPauseEnd(); 
+                    this.audio.speak("Resuming.", true);
+                    this.uiStatus.innerText = "Resuming...";
+                    setTimeout(() => this.nextRound(), 1000);
+                }
+            }
+
+            handleSuccess() {
+                this.score += 10;
+                this.updateScoreUI();
+                this.uiStatus.innerText = "Correct!";
+
+                const nextLevel = LEVELS.slice().reverse().find(l => this.score === l.score && l.score > 0);
+
+                if (nextLevel) {
+                    if (nextLevel.checkpoint) {
+                        this.enterCheckpoint(nextLevel);
+                    } else {
+                        this.performLevelUp(nextLevel);
+                    }
+                } else {
+                    this.audio.playSuccess();
+                    
+                    const baseDelay = this.currentSettings.delay;
+                    let msg = "Correct";
+                    if (baseDelay >= 400 && this.score % 50 === 0) {
+                        msg += ". Score " + this.score;
+                    }
+                    this.audio.speak(msg);
+                    
+                    this.state = 'LOCKED';
+                    setTimeout(() => this.nextRound(), baseDelay);
+                }
+            }
+
+            performLevelUp(levelConfig) {
+                this.state = 'LOCKED';
+                this.currentSettings = levelConfig; 
+                this.audio.playLevelUp();
+                setTimeout(() => this.audio.speak("Correct. " + levelConfig.label, true), 300);
+                this.runCountdown(2500); 
+            }
+
+            enterCheckpoint(levelConfig) {
+                this.currentSettings = levelConfig;
+                this.state = 'STANDBY'; 
+                this.uiStatus.innerText = "Paused. Swipe Up.";
+                this.audio.playLevelUp();
+                const msg = "Congratulations! Score one thousand. Next level: Level 9. Zero Delay Mode. The pause between turns has been removed. Swipe up to continue.";
+                this.audio.speak(msg, true);
+            }
+
+            resumeFromCheckpoint() {
+                this.state = 'LOCKED';
+                this.uiStatus.innerText = "Resuming...";
+                this.audio.speak("Ready.");
+                this.runCountdown(2500);
+            }
+
+            handleTimeout() {
+                this.resetTimers();
+                this.gameOver("Time's up.");
+            }
+
+            gameOver(reason) {
+                this.state = 'LOCKED';
+                this.audio.playFailure();
+                this.uiStatus.innerText = reason;
+                
+                let msg = reason + " Game Over. Final Score " + this.score + ".";
+                let delay = 3000; // Standard delay
+
+                if (this.score >= 1000) {
+                    msg += " Tip: You can start at Level 9 if you swipe right with three fingers while playing.";
+                    delay = 7000;
+                } else if (this.score >= 550 && this.score < 850) { // Level 5, 6, 7
+                    msg += " Tip: You can skip to level five by swiping down with three fingers while playing.";
+                    delay = 7000;
+                }
+                
+                this.audio.speak(msg, true);
+
+                setTimeout(() => {
+                    this.enterStandby();
+                }, delay); 
+            }
+
+            // --- Cheats ---
+            cheatSkipLevel() {
+                const now = Date.now();
+                if (now - this.skipCooldown < 3000) return;
+                this.skipCooldown = now;
+                this.resetTimers();
+                this.stopTimerAnimation();
+
+                const nextLevel = LEVELS.find(l => l.score > this.score);
+                if (!nextLevel) {
+                    this.handleSuccess(); 
+                    return;
+                }
+                this.score = nextLevel.score;
+                this.updateScoreUI();
+                if (nextLevel.checkpoint) this.enterCheckpoint(nextLevel);
+                else this.performLevelUp(nextLevel);
+            }
+
+            cheatSkipTo5() { 
+                return this.cheatJumpTo(
+                    LEVELS[4], 
+                    "Skipping to Level 5. Extreme Speed. 1 second.", 
+                    2500
+                ); 
+            }
+            
+            cheatSkipTo9() { 
+                return this.cheatJumpTo(
+                    LEVELS[8], 
+                    "Skipping to Level 9. Zero Delay Mode. The pause between turns has been removed.", 
+                    5500
+                ); 
+            }
+
+            cheatJumpTo(levelConfig, msg, customDelay = 2500) {
+                const now = Date.now();
+                if (now - this.skipCooldown < 3000) return;
+                this.skipCooldown = now;
+                this.resetTimers();
+                this.stopTimerAnimation();
+                
+                this.score = levelConfig.score;
+                this.updateScoreUI();
+                this.state = 'LOCKED';
+                this.currentSettings = levelConfig;
+                
+                this.audio.playLevelUp();
+                setTimeout(() => this.audio.speak(msg, true), 300);
+                this.runCountdown(customDelay);
+            }
+
+            // --- Utilities ---
+            runCountdown(delay) {
+                setTimeout(() => {
+                    this.runCountdownEffect();
+                    setTimeout(() => this.nextRound(), 3000);
+                }, delay);
+            }
+
+            runCountdownEffect() {
+                this.audio.playTone(600, 'sine', 0.15, 0, 0.2);
+                setTimeout(() => this.audio.playTone(600, 'sine', 0.15, 0, 0.2), 1000);
+                setTimeout(() => this.audio.playTone(1000, 'sine', 0.3, 0, 0.25), 2000);
+            }
+
+            resetTimers() {
+                if (this.roundTimer) clearTimeout(this.roundTimer);
+                if (this.pulseInterval) clearInterval(this.pulseInterval);
+            }
+
+            animateTimer(duration) {
+                this.uiTimer.style.transition = 'none';
+                this.uiTimer.style.width = '100%';
+                void this.uiTimer.offsetWidth; 
+                this.uiTimer.style.transition = `width ${duration}ms linear`;
+                this.uiTimer.style.width = '0%';
+            }
+
+            stopTimerAnimation() {
+                const width = this.uiTimer.getBoundingClientRect().width;
+                this.uiTimer.style.transition = 'none';
+                this.uiTimer.style.width = width + 'px';
+            }
+
+            updateScoreUI() {
+                this.uiScore.innerText = `Score: ${this.score}`;
+            }
+        }
+
+        /**
+         * --- INPUT HANDLING ---
+         */
+        class InputHandler {
+            constructor(callback) {
+                this.callback = callback;
+                this.canvas = document.getElementById('game-canvas');
+                this.touchStartX = 0;
+                this.touchStartY = 0;
+                this.maxTouches = 0;
+                this.lastTapTime = 0;
+                this.gestureStartTime = 0;
+                this.bindCanvasEvents();
+                this.bindKeyboardEvents();
+                this.resizeCanvas();
+                window.addEventListener('resize', () => this.resizeCanvas());
+            }
+
+            resizeCanvas() {
+                this.canvas.width = this.canvas.offsetWidth;
+                this.canvas.height = this.canvas.offsetHeight;
+                const ctx = this.canvas.getContext('2d');
+                ctx.fillStyle = "#111";
+                ctx.fillRect(0,0, this.canvas.width, this.canvas.height);
+                ctx.fillStyle = "#333";
+                ctx.font = "20px Arial";
+                ctx.textAlign = "center";
+                ctx.fillText("Swipe Zone", this.canvas.width/2, this.canvas.height/2);
+            }
+
+            bindCanvasEvents() {
+                const c = this.canvas;
+                const prevent = (e) => { 
+                    if(e.cancelable) e.preventDefault(); 
+                    e.stopPropagation(); 
+                };
+
+                c.addEventListener('touchmove', (e) => {
+                    prevent(e);
+                    if (e.touches.length > this.maxTouches) this.maxTouches = e.touches.length;
+                }, { passive: false });
+
+                c.addEventListener('touchstart', (e) => {
+                    prevent(e);
+                    if (e.touches.length === 1) {
+                        this.maxTouches = 1;
+                        this.gestureStartTime = Date.now();
+                    } else if (e.touches.length > this.maxTouches) {
+                        this.maxTouches = e.touches.length;
+                    }
+                    
+                    this.touchStartX = e.changedTouches[0].screenX;
+                    this.touchStartY = e.changedTouches[0].screenY;
+                }, { passive: false });
+
+                c.addEventListener('touchend', (e) => {
+                    prevent(e);
+                    if (e.touches.length > 0) return;
+
+                    const touchEndX = e.changedTouches[0].screenX;
+                    const touchEndY = e.changedTouches[0].screenY;
+                    this.processGesture(touchEndX, touchEndY);
+                }, { passive: false });
+            }
+
+            processGesture(endX, endY) {
+                const diffX = endX - this.touchStartX;
+                const diffY = endY - this.touchStartY;
+                const duration = Date.now() - this.gestureStartTime;
+
+                // 3-Finger Gestures
+                if (this.maxTouches === 3) {
+                    const moveDist = Math.max(Math.abs(diffX), Math.abs(diffY));
+
+                    const TAP_THRESHOLD = 150;      
+                    const SWIPE_THRESHOLD = 300;    
+                    const DOUBLE_TAP_TIMEOUT = 800; 
+                    const QUICK_TAP_DURATION = 350; 
+
+                    const isTap = moveDist < TAP_THRESHOLD || duration < QUICK_TAP_DURATION;
+
+                    if (isTap) {
+                        const now = Date.now();
+                        if (this.lastTapTime && (now - this.lastTapTime < DOUBLE_TAP_TIMEOUT)) {
+                            this.callback('pause');
+                            this.lastTapTime = 0; 
+                        } else {
+                            this.lastTapTime = now;
+                        }
+                        this.maxTouches = 0;
+                        return;
+                    }
+
+                    if (moveDist > SWIPE_THRESHOLD) {
+                        if (Math.abs(diffY) > Math.abs(diffX)) {
+                            if (diffY < 0) {
+                                this.callback('skip');
+                                this.maxTouches = 0;
+                                return;
+                            } else if (diffY > 0) {
+                                this.callback('skip_to_5'); // Down -> Skip to 5
+                                this.maxTouches = 0;
+                                return;
+                            }
+                        } else {
+                            if (diffX > 0) {
+                                this.callback('skip_to_9');
+                                this.maxTouches = 0;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Standard 1-Finger Gestures
+                if (this.maxTouches < 3) {
+                    const threshold = 40;
+                    if (Math.abs(diffX) > Math.abs(diffY)) {
+                        if (Math.abs(diffX) > threshold) {
+                            this.callback(diffX > 0 ? 1 : -1); 
+                        }
+                    } else {
+                        if (Math.abs(diffY) > threshold) {
+                            if (diffY < 0) this.callback(0); // Swipe Up
+                            else this.callback('tutorial'); // Swipe Down
+                        }
+                    }
+                }
+            }
+
+            bindKeyboardEvents() {
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === "ArrowLeft") this.callback(-1);
+                    if (e.key === "ArrowUp") this.callback(0);
+                    if (e.key === "ArrowDown") this.callback('tutorial');
+                    if (e.key === "ArrowRight") this.callback(1);
+                    if (e.key.toLowerCase() === "l") this.callback('skip');
+                    if (e.key === "5") this.callback('skip_to_5');
+                    if (e.key === "9") this.callback('skip_to_9');
+                    if (e.key.toLowerCase() === "p") this.callback('pause');
+                });
+            }
+        }
+
+        const audio = new AudioManager();
+        const input = new InputHandler((action) => {
+            if (game) game.handleInput(action);
+        });
+        const game = new GameEngine(audio, input);
+    </script>
+</body>
+</html>
+
+
