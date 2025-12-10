@@ -139,11 +139,7 @@
             <div id="timer-bar" style="width: 100%;"></div>
         </div>
 
-        <canvas id="game-canvas" 
-                role="application" 
-                aria-label="Game Screen. Direct Touch Area."
-                tabindex="0">
-        </canvas>
+        <canvas id="game-canvas" tabindex="0"></canvas>
     </div>
 
     <div id="overlay">
@@ -153,8 +149,7 @@
             <p>1. Listen for direction (Left, Right, Center).</p>
             <p>2. Swipe to match.</p>
             <div class="gesture-hint">
-                <strong>VoiceOver Users:</strong><br>
-                Use Rotor to select <strong>"Direct Touch"</strong>.<br>
+                <strong>Controls:</strong><br>
                 1 Finger Swipe: Play Game<br>
                 Swipe Down: Tutorial<br>
                 3-Finger Double Tap: Pause/Resume<br>
@@ -173,7 +168,7 @@
             { score: 150, timeLimit: 4000, pulseSpeed: 800,  delay: 1200, label: "Level 2. 4 seconds." },
             { score: 300, timeLimit: 3000, pulseSpeed: 600,  delay: 1200, label: "Level 3. 3 seconds." },
             { score: 450, timeLimit: 2000, pulseSpeed: 400,  delay: 1200, label: "Level 4. Maximum speed. 2 seconds." },
-            { score: 550, timeLimit: 1000, pulseSpeed: 200,  delay: 1200, label: "Level 5. Extreme speed. 1 second." }, // Index 4
+            { score: 550, timeLimit: 1000, pulseSpeed: 200,  delay: 1200, label: "Level 5. Extreme speed. 1 second." },
             { score: 650, timeLimit: 750,  pulseSpeed: 100,  delay: 1200, label: "Level 6. Ludicrous speed. Point seven five seconds." },
             { score: 750, timeLimit: 700,  pulseSpeed: 80,   delay: 1200, label: "Level 7. Supersonic speed. Point seven seconds." },
             { score: 850, timeLimit: 650,  pulseSpeed: 60,   delay: 1200, label: "Level 8. Hyper speed. Point six five seconds." }, 
@@ -267,12 +262,36 @@
                 setTimeout(() => this.playTone(1046.50, 'sine', 0.6, 0, 0.1), 100);
             }
 
+            playPowerUp() {
+                if (!this.ctx) return;
+                const now = this.ctx.currentTime;
+                // Bright, magical chime (C6 Major Arpeggio)
+                const notes = [1046.50, 1318.51, 1567.98, 2093.00]; 
+                notes.forEach((freq, i) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now);
+                    
+                    gain.gain.setValueAtTime(0.08, now + i * 0.06); 
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.06 + 0.4); 
+
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    
+                    osc.start(now + i * 0.06);
+                    osc.stop(now + i * 0.06 + 0.4);
+                });
+            }
+
+            // Ascending Paused Tones
             playPauseStart() {
                 this.playTone(440, 'sine', 0.1, 0, 0.2); 
                 setTimeout(() => this.playTone(554.37, 'sine', 0.1, 0, 0.2), 150); 
                 setTimeout(() => this.playTone(659.25, 'sine', 0.2, 0, 0.2), 300); 
             }
 
+            // Descending Resume Tones
             playPauseEnd() {
                 this.playTone(659.25, 'sine', 0.1, 0, 0.2); 
                 setTimeout(() => this.playTone(554.37, 'sine', 0.1, 0, 0.2), 150); 
@@ -294,6 +313,7 @@
                 
                 this.currentTarget = 0;
                 this.currentSettings = LEVELS[0];
+                this.powerUpTarget = null;
                 
                 this.pulseInterval = null;
                 this.roundTimer = null;
@@ -331,6 +351,21 @@
                 }
             }
 
+            calculatePowerUpTarget() {
+                const idx = LEVELS.indexOf(this.currentSettings);
+                // No chime for Level 9 (last level) or invalid levels
+                if (idx === -1 || idx >= LEVELS.length - 1) {
+                    this.powerUpTarget = null;
+                    return;
+                }
+                const start = LEVELS[idx].score;
+                const end = LEVELS[idx+1].score;
+                const mid = start + (end - start) / 2;
+                // Round up to nearest 10
+                this.powerUpTarget = Math.ceil(mid / 10) * 10;
+            }
+
+            // --- State: STANDBY ---
             enterStandby() {
                 this.audio.init();
                 this.state = 'STANDBY';
@@ -340,6 +375,7 @@
                 this.updateScoreUI();
                 this.uiStatus.innerText = "Swipe Up: Start | Down: Tutorial";
                 this.currentSettings = LEVELS[0];
+                this.calculatePowerUpTarget();
                 
                 this.resetTimers();
                 this.input.canvas.focus();
@@ -347,6 +383,7 @@
                 this.audio.speak("Welcome to audio reflex. Swipe up to begin. Swipe down to hear the tutorial.", true);
             }
 
+            // --- State: TUTORIAL ---
             async runTutorial() {
                 this.state = 'TUTORIAL';
                 this.isTutorialInputLocked = true;
@@ -378,6 +415,13 @@
                 await this.tutorialWait(1000);
                 await this.audio.speakAsync("This sound means game over.");
                 await this.tutorialPromptNext();
+
+                // --- NEW STEP ---
+                this.audio.playPowerUp();
+                await this.tutorialWait(1500);
+                await this.audio.speakAsync("This sound means you are halfway through the level.");
+                await this.tutorialPromptNext();
+                // ----------------
 
                 this.audio.playLevelUp();
                 await this.tutorialWait(1500);
@@ -412,10 +456,12 @@
                 }
             }
 
+            // --- State: PLAYING ---
             startLevel1() {
                 this.state = 'LOCKED';
                 this.uiStatus.innerText = "Starting...";
                 this.audio.speak("Game Started. Level 1. 5 Seconds.");
+                
                 this.runCountdown(2500);
             }
 
@@ -438,12 +484,14 @@
             }
 
             handleInput(direction) {
+                // Pause Handling
                 if (direction === 'pause') {
                     this.togglePause();
                     return;
                 }
 
                 if (this.state === 'PAUSED') {
+                    // NEW: If paused and user swipes, remind them how to resume
                     if (direction === -1 || direction === 0 || direction === 1 || direction === 'tutorial') {
                         this.audio.speak("Game paused. Double tap with three fingers to resume.", true);
                     }
@@ -505,6 +553,11 @@
                 this.updateScoreUI();
                 this.uiStatus.innerText = "Correct!";
 
+                // Check for Power Up Chime
+                if (this.score === this.powerUpTarget) {
+                    this.audio.playPowerUp();
+                }
+
                 const nextLevel = LEVELS.slice().reverse().find(l => this.score === l.score && l.score > 0);
 
                 if (nextLevel) {
@@ -517,11 +570,7 @@
                     this.audio.playSuccess();
                     
                     const baseDelay = this.currentSettings.delay;
-                    let msg = "Correct";
-                    if (baseDelay >= 400 && this.score % 50 === 0) {
-                        msg += ". Score " + this.score;
-                    }
-                    this.audio.speak(msg);
+                    // REMOVED PERIODIC SCORE ANNOUNCEMENT
                     
                     this.state = 'LOCKED';
                     setTimeout(() => this.nextRound(), baseDelay);
@@ -530,14 +579,17 @@
 
             performLevelUp(levelConfig) {
                 this.state = 'LOCKED';
-                this.currentSettings = levelConfig; 
+                this.currentSettings = levelConfig;
+                this.calculatePowerUpTarget(); 
                 this.audio.playLevelUp();
-                setTimeout(() => this.audio.speak("Correct. " + levelConfig.label, true), 300);
-                this.runCountdown(2500); 
+                // ADDED SCORE TO LEVEL UP ANNOUNCEMENT
+                setTimeout(() => this.audio.speak("Score " + this.score + ". " + levelConfig.label, true), 300);
+                this.runCountdown(3500); 
             }
 
             enterCheckpoint(levelConfig) {
                 this.currentSettings = levelConfig;
+                this.calculatePowerUpTarget();
                 this.state = 'STANDBY'; 
                 this.uiStatus.innerText = "Paused. Swipe Up.";
                 this.audio.playLevelUp();
@@ -626,6 +678,7 @@
                 this.updateScoreUI();
                 this.state = 'LOCKED';
                 this.currentSettings = levelConfig;
+                this.calculatePowerUpTarget();
                 
                 this.audio.playLevelUp();
                 setTimeout(() => this.audio.speak(msg, true), 300);
@@ -727,6 +780,7 @@
 
                 c.addEventListener('touchend', (e) => {
                     prevent(e);
+                    // IMPORTANT: Wait for ALL fingers to lift to avoid "finger shuffle" swipe artifacts
                     if (e.touches.length > 0) return;
 
                     const touchEndX = e.changedTouches[0].screenX;
@@ -744,18 +798,24 @@
                 if (this.maxTouches === 3) {
                     const moveDist = Math.max(Math.abs(diffX), Math.abs(diffY));
 
-                    const TAP_THRESHOLD = 150;      
-                    const SWIPE_THRESHOLD = 300;    
-                    const DOUBLE_TAP_TIMEOUT = 800; 
-                    const QUICK_TAP_DURATION = 350; 
+                    // --- ULTRA PERMISSIVE THRESHOLDS ---
+                    const TAP_THRESHOLD = 150;      // Huge variance allowed for taps
+                    const SWIPE_THRESHOLD = 300;    // Requires deliberate long swipe
+                    const DOUBLE_TAP_TIMEOUT = 800; // Nearly 1s to double tap
+                    const QUICK_TAP_DURATION = 350; // Anything faster than this is a tap
 
+                    // Tap Logic:
+                    // 1. Movement is small (< 150px)
+                    // OR
+                    // 2. Interaction was very fast (< 350ms) - Handles "finger swap" coordinate jumps
                     const isTap = moveDist < TAP_THRESHOLD || duration < QUICK_TAP_DURATION;
 
                     if (isTap) {
                         const now = Date.now();
+                        // Double Tap Detection
                         if (this.lastTapTime && (now - this.lastTapTime < DOUBLE_TAP_TIMEOUT)) {
                             this.callback('pause');
-                            this.lastTapTime = 0; 
+                            this.lastTapTime = 0; // Prevent triple tap triggering
                         } else {
                             this.lastTapTime = now;
                         }
@@ -763,6 +823,7 @@
                         return;
                     }
 
+                    // Swipe Logic (Must clear the massive Safe Zone of 300px)
                     if (moveDist > SWIPE_THRESHOLD) {
                         if (Math.abs(diffY) > Math.abs(diffX)) {
                             if (diffY < 0) {
